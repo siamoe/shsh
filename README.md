@@ -1,3 +1,10 @@
+使用方法：
+```bash
+wget -N --no-check-certificate -O /opt/brook.sh https://github.com/siamoe/shsh/blob/main/alpine-brook.sh
+ ```
+```bash
+bash /opt/brook.sh 8888 127.0.0.1:1111
+```
 删除相关端口转发
 如果我们多次运行脚本转发端口，有些不使用了，需要删除，则按要求操作命令：
 
