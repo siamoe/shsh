@@ -31,5 +31,5 @@ rm /etc/init.d/brook_8888
   
 - **禁用服务开机自启**：
   ```bash
- rc-update add brook_8888 default
+  rc-update add brook_8888 default
   ```
