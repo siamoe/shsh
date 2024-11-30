@@ -2,15 +2,27 @@
 如果我们多次运行脚本转发端口，有些不使用了，需要删除，则按要求操作命令：
 
 #查看全部转发端口配置文件，格式为brook_8888.service，8888为本地转发的端口
-ls /etc/init.d/brook_*
+
+  ```bash
+  ls /etc/init.d/brook_*
+  ```
 
 #停止端口转发，8888为你需要停止的本地转发的端口，自行修改
-rc-service brook_8888 stop
+
+  ```bash
+  rc-service brook_8888 stop
+  ```
 
 #删除端口转发，8888为你需要停止的本地转发的端口，自行修改
-rc-update del brook_8888
+
+  ```bash
+  rc-update del brook_8888
+  ```
 然后
-rm /etc/init.d/brook_8888
+  ```bash
+  rm /etc/init.d/brook_8888
+  ```
+
 运行完成后，指定端口转发会彻底删除。
 
 
