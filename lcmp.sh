@@ -6,7 +6,6 @@
 # 支持的系统:
 # Alpine Linux
 #
-# Copyright (C) 2023 - 2025 Teddysun <i@teddysun.com>
 #
 trap _exit INT QUIT TERM
 
@@ -101,19 +100,6 @@ if ! check_sys; then
     _error "不支持的操作系统，请使用 Alpine Linux 并重试。"
 fi
 
-# 在安装前检查系统内存
-total_mem=$(free -m | awk '/^Mem:/{print $2}')
-if [ $total_mem -lt 512 ]; then
-    _warn "系统内存小于512MB，可能会影响性能"
-fi
-
-# 添加生成随机密码的函数
-generate_random_password() {
-    local length=16
-    local chars="A-Za-z0-9!@#$%^&*()_+"
-    tr -dc "$chars" < /dev/urandom | head -c "$length"
-}
-
 # 选择MariaDB版本
 while true; do
     _info "请选择 MariaDB 版本:"
@@ -141,9 +127,9 @@ _info "---------------------------"
 
 # 设置MariaDB root密码
 _info "请输入MariaDB的root密码:"
-read -r -p "[$(date)] (回车随机密码):" db_pass
+read -r -p "[$(date)] (默认密码: Teddysun.com):" db_pass
 if [ -z "${db_pass}" ]; then
-    db_pass=$(generate_random_password)
+    db_pass="Teddysun.com"
 fi
 _info "---------------------------"
 _info "密码 = $(_red "${db_pass}")"
@@ -194,36 +180,7 @@ char=$(get_char)
 _info "VPS 初始化开始"
 _error_detect "rm -f /etc/localtime"
 _error_detect "ln -s /usr/share/zoneinfo/Asia/Shanghai /etc/localtime"
-# 添加系统检查函数
-check_system_requirements() {
-    _info "正在检查系统要求..."
-    
-    # 检查内存
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    if [ $total_mem -lt 512 ]; then
-        _warn "系统内存小于512MB，可能会影响性能"
-    else
-        _info "系统内存: $(_green "${total_mem}MB")"
-    fi
-    
-    # 检查磁盘空间
-    local free_space=$(df -m / | awk 'NR==2 {print $4}')
-    if [ $free_space -lt 1024 ]; then
-        _warn "可用磁盘空间小于1GB，可能会影响安装"
-    else
-        _info "可用磁盘空间: $(_green "$((free_space/1024))GB")"
-    fi
-    
-    # 检查CPU核心数
-    local cpu_cores=$(nproc)
-    _info "CPU核心数: $(_green "${cpu_cores}")"
-    
-    # 检查系统负载
-    local load_avg=$(cat /proc/loadavg | awk '{print $1}')
-    _info "系统负载: $(_green "${load_avg}")"
-    
-    echo
-}
+
 # 基础包安装
 _error_detect "apk update"
 _error_detect "apk add --no-cache vim tar zip unzip net-tools bind-tools screen git virt-what wget whois mtr traceroute iftop htop jq tree curl"
@@ -263,28 +220,22 @@ _error_detect "mkdir -p /var/log/caddy/"
 _error_detect "mkdir -p /etc/caddy/conf.d/"
 _error_detect "chown -R caddy:caddy /var/log/caddy/"
 
-# 在脚本开头添加 MariaDB 别名设置
-cat > /etc/profile.d/mariadb_aliases.sh <<EOF
-alias mysql=mariadb
-alias mysqld_safe=mariadbd-safe
-alias mysqladmin=mariadbd-admin
-EOF
-
-source /etc/profile.d/mariadb_aliases.sh
-
-# 修改 Caddy 配置，使用最简单的配置
+# 配置Caddy
 cat >/etc/caddy/Caddyfile <<EOF
 {
     admin off
-    auto_https off
 }
-
 import /etc/caddy/conf.d/*.conf
 EOF
 
-# 修改默认站点配置
+# 配置默认站点
 cat >/etc/caddy/conf.d/default.conf <<EOF
 :80 {
+    header {
+        Strict-Transport-Security "max-age=31536000; preload"
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+    }
     root * /data/www/default
     encode gzip
     php_fastcgi unix//run/php-fpm.sock
@@ -304,9 +255,6 @@ EOF
 # 配置MariaDB
 cat >/etc/my.cnf.d/server.cnf <<EOF
 [mysqld]
-bind-address = 0.0.0.0
-port = 3306
-skip-networking = 0
 innodb_buffer_pool_size = 100M
 max_allowed_packet = 1024M
 net_read_timeout = 3600
@@ -351,19 +299,19 @@ rm -rf /var/lib/mysql/*
 
 # 设置root密码
 /usr/bin/mariadb -u root <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${db_pass}';
+ALTER USER 'root'@'localhost' IDENTIFIED BY 'Teddysun.com';
 FLUSH PRIVILEGES;
 EOF
 
 # 更新密码文件
-echo "${db_pass}" > /root/.lcmp_db_pass
+echo "Teddysun.com" > /root/.lcmp_db_pass
 chmod 600 /root/.lcmp_db_pass
 
 # 安装phpMyAdmin
 _error_detect "wget -qO pma.tar.gz https://dl.lamp.sh/files/pma.tar.gz"
 _error_detect "tar zxf pma.tar.gz -C /data/www/default/"
 _error_detect "rm -f pma.tar.gz"
-/usr/bin/mariadb -uroot -p"${db_pass}" </data/www/default/pma/sql/create_tables.sql
+mysql -uroot -p"${db_pass}" </data/www/default/pma/sql/create_tables.sql
 
 # 设置目录权限
 _error_detect "chown -R caddy:caddy /data/www"
@@ -373,17 +321,9 @@ _error_detect "rc-update add mariadb default"
 _error_detect "rc-update add php-fpm${php_pkg_ver} default"
 _error_detect "rc-update add caddy default"
 
-# 在启动 Caddy 之前添加配置验证
-verify_caddy_config() {
-    if ! caddy validate --config /etc/caddy/Caddyfile; then
-        _error "Caddy 配置验证失败"
-    fi
-    # 格式化配置文件
-    caddy fmt --overwrite /etc/caddy/Caddyfile
-}
-
-# 在重启 Caddy 之前验证配置
-_error_detect "verify_caddy_config"
+# 启动服务（修改这部分）
+_error_detect "/etc/init.d/mariadb restart"
+_error_detect "/etc/init.d/php-fpm${php_pkg_ver} restart"
 _error_detect "/etc/init.d/caddy restart"
 
 # 添加服务状态检查函数（放在脚本开头的函数定义部分）
@@ -449,14 +389,12 @@ create_default_page() {
 </head>
 <body>
     <div class="container">
-        <h1>LCMP - Alpine Linux 服务器信息</h1>
+        <h1>LCMP 服务器信息</h1>
         <div class="info-grid">
             <div class="info-box">
                 <h3>系统信息</h3>
                 <table>
-                    <tr>
-                        <td>操作系统</td>
-                        <td><?php 
+                    <tr><td>操作系统</td><td><?php 
                             $os = '';
                             if (file_exists('/etc/os-release')) {
                                 $os_info = parse_ini_file('/etc/os-release');
@@ -466,41 +404,15 @@ create_default_page() {
                                 $os = php_uname('s') . ' ' . php_uname('r');
                             }
                             echo htmlspecialchars($os);
-                        ?></td>
-                    </tr>
+                        ?></td></tr>
                     <tr><td>服务器时间</td><td><?php echo date('Y-m-d H:i:s'); ?></td></tr>
-                    <tr><td>服务器IP</td><td><?php 
-                        // 获取非环回地址的IPv4
-                        $ip_command = 'ip -4 addr show scope global | grep -oP "(?<=inet ).*(?=/)" | head -1';
-                        $server_ip = trim(shell_exec($ip_command));
-                        
-                        // 如果为空或是本地地址，尝试其他方法
-                        if (empty($server_ip) || $server_ip == '127.0.0.1' || strpos($server_ip, '192.168.') === 0) {
-                            // 尝试通过外部服务获取公网IP
-                            $server_ip = trim(shell_exec('curl -s --connect-timeout 5 ip.sb'));
-                            
-                            // 备选的外部服务
-                            if (empty($server_ip) || $server_ip == '127.0.0.1') {
-                                $server_ip = trim(shell_exec('curl -s --connect-timeout 5 ifconfig.me'));
-                            }
-                            
-                            // 再尝试一个备选
-                            if (empty($server_ip) || $server_ip == '127.0.0.1') {
-                                $server_ip = trim(shell_exec('curl -s --connect-timeout 5 ident.me'));
-                            }
-                        }
-                        
-                        // 最后尝试服务器变量
-                        if (empty($server_ip) || $server_ip == '127.0.0.1') {
-                            if (!empty($_SERVER['SERVER_ADDR']) && $_SERVER['SERVER_ADDR'] != '127.0.0.1') {
-                                $server_ip = $_SERVER['SERVER_ADDR'];
-                            } elseif (!empty($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] != 'localhost') {
-                                $server_ip = $_SERVER['HTTP_HOST'];
-                            }
-                        }
-                        
-                        echo htmlspecialchars($server_ip && $server_ip != '127.0.0.1' ? $server_ip : '无法获取外部IP');
-                    ?></td></tr>
+                    <tr><td>服务器IP</td><td><?php
+$ch = curl_init('https://api.ipify.org');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$external_ip = curl_exec($ch);
+curl_close($ch);
+echo $external_ip;
+?></td></tr>
                 </table>
             </div>
             <div class="info-box">
@@ -587,35 +499,29 @@ EOF
 create_default_page
 
 # 修改服务状态检查部分
-_info "服务状态:"
-check_service_status mariadb
-check_service_status "php-fpm${php_pkg_ver}"
-check_service_status caddy
-[ -f /etc/init.d/redis ] && check_service_status redis
+#_info "服务状态:"
+#check_service_status mariadb
+#check_service_status "php-fpm${php_ver/./}"
+#check_service_status caddy
+#[ -f /etc/init.d/redis ] && check_service_status redis
 
-# 修改端口检查函数，同时检查 IPv4 和 IPv6
-check_port() {
-    local port=$1
-    local service=$2
-    if netstat -tnl | grep -E ":(${port})\s" >/dev/null 2>&1; then
-        _green "${service}已监听${port}端口\n"
-        return 0
-    else
-        # 检查是否只监听了 IPv6
-        if netstat -tnl | grep -E "::.*:${port}\s" >/dev/null 2>&1; then
-            _green "${service}已监听${port}端口(IPv6)\n"
-            return 0
-        else
-            _red "${service}未监听${port}端口\n"
-            return 1
-        fi
-    fi
-}
+# 添加端口检查
+#check_port() {
+#    local port=$1
+#    local service=$2
+#    if netstat -tnl | grep -q ":${port} "; then
+#        _green "${service}已监听${port}端口\n"
+#        return 0
+#    else
+#        _red "${service}未监听${port}端口\n"
+#        return 1
+#    fi
+#}
 
 # 检查关键端口
-check_port 80 "Caddy"
-check_port 3306 "MariaDB"
-[ -f /etc/init.d/redis ] && check_port 6379 "Redis"
+#check_port 80 "Caddy"
+#check_port 3306 "MariaDB"
+#[ -f /etc/init.d/redis ] && check_port 6379 "Redis"
 
 # 显示安装信息
 _info "安装信息:"
@@ -633,9 +539,6 @@ check_service_status caddy
 # 验证服务是否正常运行
 verify_services() {
     local error=0
-    
-    # 格式化 Caddy 配置
-    caddy fmt --overwrite /etc/caddy/Caddyfile >/dev/null 2>&1
     
     # 检查MariaDB
     if ! mysqladmin ping >/dev/null 2>&1; then
@@ -682,6 +585,7 @@ _info "管理命令: lcmp"
 _info "使用方法: lcmp help"
 _info "------------------------"
 
+# 创建LCMP管理脚本
 cat >/usr/local/bin/lcmp <<'EOF'
 #!/bin/bash
 
@@ -1212,35 +1116,3 @@ EOF
 
 # 设置权限
 chmod +x /usr/local/bin/lcmp
-
-# 添加进度显示函数
-show_progress() {
-    local current=$1
-    local total=$2
-    local percentage=$((current * 100 / total))
-    printf "\r[%-50s] %d%%" "$(printf '#%.0s' $(seq 1 $((percentage/2))))" "$percentage"
-}
-
-# 在php.ini中添加安全设置
-sed -i 's/display_errors = On/display_errors = Off/' /etc/php${php_pkg_ver}/php.ini
-
-# 添加logrotate配置
-cat > /etc/logrotate.d/lcmp <<EOF
-/var/log/caddy/*.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 caddy caddy
-}
-EOF
-
-# 添加简单的监控脚本
-cat > /usr/local/bin/lcmp-monitor <<EOF
-#!/bin/bash
-# 监控服务状态
-# 监控磁盘使用
-# 监控内存使用
-EOF
